@@ -1,0 +1,232 @@
+---
+title: "\"Expected Returns\" Project Replication Examples"
+subtitle: (draft)
+author: "Vito Lestingi"
+date: "`r Sys.Date()`"
+abstract: "This document includes replication material on some academic and practitioners' literature instrumental for our RGSoC 2020 project. The document itself is meant to be completely reproducible."
+output: 
+  rmarkdown::pdf_document:
+    citation_package: biblatex
+bibliography: references.bib
+vignette: >
+  %\VignetteIndexEntry{"Expected Returns" Project Replication Examples}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  echo = TRUE
+)
+```
+
+```{r, echo=FALSE}
+# Mentors, please feel free to add yourself to the authors' field if you wish. 
+```
+
+# Introduction
+Our main reference is \textcite{ilmanen-2011} in that we want to reproduce selected key results the author discusses on factor-based investing. However, to achieve those results many more studies from the academic and practitioners' literature need to be implemented first. An excellent resource we are using to have a shared, quantitative modeling oriented, reference is \textcite{engle-2016}.
+
+# Fundamental factor models
+
+## Three-factor model
+This model was introduced by \textcite{fama-french-1993}, expanding the work begun in \textcite{fama-french-1992}. In their cross-sectional analysis, the authors use the method of \textcite{black-jensen-scholes-1972}. However, the illustration \textcite{engle-2016} do of the model applies the usual \textcite{fama-macbeth-1973} regression analysis. I suspect this difference is due to the fact that, whereas the former work is aimed at inferring and comparing common premia between both stocks and bonds, the latter is focused on providing an analysis on stock returns.
+
+Following \textcite{engle-2016}, we express the so called Fama-French *three-factor model* as
+$$
+    r_{p,t} = \beta_{0} + \beta_{1, p}MKT_{t} + \beta_{2, p}SMB_{t} + \beta_{3, p}HML_{t} + \epsilon_{t}
+$$
+where $r_{p,t}$ is the excess return of the portfolio $p$ over the time period $t$ (or, similarly, $r_{i,t}$ for a given security); $MKT_{t}$, $SMB_{t}$, and $HML_{t}$ are the returns of the "market", "small minus big" and "high minus low" factor mimicking portfolios, respectively. The intercept $\beta_{0}$ captures the average excess return that remain unexplained by the factors considered, whereas the remaining betas represent the sensitivities with respect to the each corresponding factor. The variable $\epsilon_{t}$ is the error term.
+
+# Estimating factor models
+
+
+
+```{r data}
+# Following suggestions, I'm working on reproducing models with existing functionality first.
+# In particular, the 'FactorAnalytics' package has been suggest as useful. Which likely it is.
+# However, I'm encountering some small issues in first attempts.
+# 
+# TODO:
+# There are many aspects overlooked here. They must be included in our implementations 
+# to guarantee analysis accuracy and usage flexibility (e.g. data winsorization).
+# The examples below are first attempts to get the mechanics of some 'FactorAnalytics' 
+# functions and evaluate their feasibility for our purposes.
+# 
+
+# install_github('FactorAnalytics')
+library(ExpectedReturns)
+
+### Experimenting fitFfm() to fit FF three-factor model ###
+
+## Get and set data to pass to fitFfm()
+data("factorDataSetDjia5Yrs") 
+data("FF3.monthly")
+
+# select some variables needed
+factorDataSetDjia5Yrs <- factorDataSetDjia5Yrs[, c('DATE', 'TICKER', 'NAME', 'RETURN.OLD', 'RETURN', 'RETURN.DIFF')]
+
+# make 'ff3.data.monthly' and 'factorDataSetDjia5Yrs' compatible for testing
+ff3.data.monthly.dates <- index(FF3.monthly)
+FF3.monthly
+ff3.data.monthly <- as.data.frame(coredata(FF3.monthly))
+ff3.data.monthly <- cbind(ff3.data.monthly.dates, ff3.data.monthly)
+ff3.data.monthly
+colnames(ff3.data.monthly)[1] <- 'DATE'
+factorDataSetDjia5Yrs$DATE <- as.Date(factorDataSetDjia5Yrs$DATE)
+
+test.data <- merge(factorDataSetDjia5Yrs, ff3.data.monthly)
+
+# excess returns
+test.data$EXC.RETURN <- test.data$RETURN - test.data$RF # FF risk-free rate (one-month Treasury bill rate from Ibbotson Associates)
+#test.data <- na.exclude(test.data)
+#v <- is.na(test.data)
+test.data$RF <- NULL
+```
+
+## Fama-MacBeth
+
+```{r plain Fama-MacBeth}
+# 
+# TODO:
+# Again, there are aspects overlooked. Both in the pre-processing (winsorization,
+# truncation, etc.) and in the post-processing of the Fama-MacBeth methodology 
+# (standard error corrections, test statistics adjustements and so on). Then their
+# summaries as well.
+# Once the core method is in place they are both straightforward.
+# 
+# Also, it's rather naive in this form. However, it can be more or less easily 
+# improved and extended to other models. 
+
+# Merge & match FF3 factors data and stocks data
+#test.data <- merge(factorDataSetDjia5Yrs, ff3.data.monthly)
+
+## Fama-MacBeth for FF Three-factor model, looping over lm()
+# test.data$EXC.RETURN <- test.data$RETURN - test.data$RF # FF risk-free rate (one-month Treasury bill rate from Ibbotson Associates)
+periods <- unique(factorDataSetDjia5Yrs$DATE)
+tickers <- unique(factorDataSetDjia5Yrs$TICKER)
+factor.vars <- c('MKT.RF', 'SMB', 'HML')
+
+# Run N time-series regressions
+beta.coefs <- matrix(NA, length(tickers), length(factor.vars) + 1)
+for (i in 1:length(tickers)) {
+  asset.reg <- lm(EXC.RETURN ~ MKT.RF + SMB + HML, data=test.data[which(test.data[, 'TICKER'] == tickers[i]), ])
+  beta.coefs[i, ] <- asset.reg$coefficients
+}
+row.names(beta.coefs) <- tickers
+colnames(beta.coefs) <- c('(Intercept)', 'MKT.RF', 'SMB', 'HML')
+beta.coefs
+
+
+
+# Run T cross-sectional regressions 
+gamma.coefs <- matrix(NA, length(periods), length(factor.vars) + 1)
+gamma.rsq <- matrix(NA, length(periods), 1)
+for (t in 1:length(periods)) {
+  per.period.assets.ret <- test.data[which(test.data[, 'DATE'] == periods[t]), 'EXC.RETURN']
+  data <- data.frame('EXC.RETURN'=per.period.assets.ret, beta.coefs[, 2:4]) # excluding prev. est. intercepts
+  time.reg <- lm(EXC.RETURN ~ MKT.RF + SMB + HML, data=data)
+  gamma.coefs[t, ] <- time.reg$coefficients
+}
+gamma.coefs <- data.frame(periods, gamma.coefs)
+colnames(gamma.coefs) <- c('DATE', '(Intercept)', 'MKT.RF', 'SMB', 'HML')
+gamma.coefs
+
+# Average last regression coefficients estimates
+avg.coefs <- colMeans(gamma.coefs[, 2:ncol(gamma.coefs)])
+avg.coefs
+```
+
+## Fama-Macbeth plm 
+
+```{r Fama-MacBeth method with plm}
+
+# NOTE: 
+# same limitations stated in previous TODOs still hold.
+# Only concerning with the core mechanics so far.
+
+library(plm)             # to estimate model
+
+# match and merge FF3 factors data and stocks data
+test.data.plm <- test.data
+
+# Indexes to determine panel structure
+# 'PERIOD.ID', each date gets same number id across
+periods <- unique(factorDataSetDjia5Yrs$DATE)
+periods.id <- 1:length(periods)
+periods.id <- data.frame('DATE'=periods, 'PERIOD.ID'=periods.id)
+test.data.plm <- merge(test.data.plm, periods.id, by='DATE')
+# 'ASSET.ID', each asset gets same number id across
+tickers <- unique(factorDataSetDjia5Yrs$TICKER)
+assets.id <- 1:length(tickers)
+assets.id <- data.frame('TICKER'=tickers, 'ASSET.ID'=assets.id)
+test.data.plm <- merge(test.data.plm, assets.id) # this messes up dates order within a ticker
+
+# Sort data set
+test.data.plm <- test.data.plm[order(test.data.plm[, 'ASSET.ID'], test.data.plm[, 'PERIOD.ID']), ]
+row.names(test.data.plm) <- NULL
+
+#test.data.plm$EXC.RETURN <- test.data.plm$RETURN - test.data.plm$RF # FF risk-free rate (1-month T-bill rate)
+test.data.input <- test.data.plm[, c("ASSET.ID", "PERIOD.ID", "DATE", "EXC.RETURN", "MKT.RF", "SMB", "HML")]
+
+# Time-series regressions
+fm.ts.reg <- plm::pmg(EXC.RETURN ~ MKT.RF + SMB + HML, 
+                      data=test.data.input, index=c('ASSET.ID', 'PERIOD.ID'))
+summary(fm.ts.reg)
+betas <- t(fm.ts.reg$indcoef) # all coefficients
+rownames(betas) <- tickers
+colnames(betas) <- paste('BETA', colnames(betas), sep='.')
+betas
+
+# (Check my Fama-MacBeth snippet vs. `plm` version)
+betas == beta.coefs
+
+# Cross-sectional regressions
+test.data.input.second <- test.data.input[order(test.data.input[, 'DATE']), ]
+test.data.input.second <- data.frame(
+  test.data.input.second[, c("PERIOD.ID", "ASSET.ID", "DATE", "EXC.RETURN")], 
+  betas[, 2:4]
+)
+
+fm.cs.reg <- plm::pmg(EXC.RETURN ~ BETA.MKT.RF + BETA.SMB + BETA.HML, 
+                      data=test.data.input.second, index=c('PERIOD.ID', 'ASSET.ID'))
+summary(fm.cs.reg)
+gammas <- t(fm.cs.reg$indcoef) # all coefficients
+gammas <- data.frame(periods, gammas)
+colnames(gammas) <- c('DATE', '(Intercept)', 'MKT.RF', 'SMB', 'HML')
+gammas
+
+# (Check my Fama-MacBeth snippet vs. `plm` version)
+gammas == gamma.coefs
+```
+
+
+## Fama-French with fitTsfm and fitFfm
+
+```{r plain Fama-French}
+# factor exposures
+library(data.table)
+exposure.vars <- c('MKT.RF', 'SMB', 'HML')
+
+# test.data<-randomForest(EXC.RETURN~., data=test.data, na.action =na.roughfix)
+## Run fitFfm() to fit factor model using cross-sectional regression
+  
+test.data.third <- dcast(test.data, DATE ~ TICKER,  value.var = "EXC.RETURN")
+test.data.third <- merge(test.data.third, ff3.data.monthly[c('DATE', 'MKT.RF','SMB','HML')], by='DATE')
+row.names(test.data.third) <- test.data.third$DATE
+test.data.third$DATE <- NULL
+fit.test <- fitTsfm(asset.names = unique(factorDataSetDjia5Yrs$TICKER), factor.names = c('MKT.RF','SMB','HML'), data = test.data.third)
+fit.test.coefs <- cbind(fit.test$alpha, fit.test$beta)
+fit.test.coefs == betas
+
+test.data.fourth  <-  data.frame(test.data[, c("DATE", "TICKER", "EXC.RETURN")], fit.test.coefs[, 2:4]) 
+fit.test.second <- fitFfm(data=test.data.fourth, asset.var="TICKER", ret.var="EXC.RETURN", date.var="DATE", exposure.vars=exposure.vars, addIntercept=TRUE, lagExposures = FALSE)
+
+fit.test.second.coefs <- data.frame(unique(test.data.fourth$DATE), fit.test.second$factor.returns)
+colnames(fit.test.second.coefs) <- c('DATE', '(Intercept)', 'MKT.RF', 'SMB', 'HML')
+row.names(fit.test.second.coefs) <- NULL
+fit.test.second.coefs == gammas
+```
+
